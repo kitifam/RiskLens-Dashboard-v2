@@ -2,17 +2,39 @@ import React, { useState } from 'react';
 import { Risk } from '../types/risk';
 import { getRiskLevel, cn, getRiskContent } from '../lib/utils';
 import { Button } from './ui/Button';
-import { Eye, Edit2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Eye, Edit2, ChevronLeft, ChevronRight, AlertTriangle, Clock, HelpCircle, Minus, CheckCircle2, Trash2 } from 'lucide-react';
 import { Badge } from './ui/Badge';
 import { useLanguage } from '../contexts/LanguageContext';
+import { getUsernameById } from '../data/mockUsers';
+import type { SentimentResult } from '../lib/sentimentAnalysis';
 
 interface RiskListProps {
   risks: Risk[];
   onView?: (risk: Risk) => void;
   onEdit?: (risk: Risk) => void;
+  onDelete?: (risk: Risk) => void;
+  /** RBAC: แสดงปุ่ม Edit ได้หรือไม่ */
+  canEdit?: (risk: Risk) => boolean;
+  /** RBAC: แสดงปุ่ม Delete ได้หรือไม่ */
+  canDelete?: (risk: Risk) => boolean;
+  showReportedBy?: boolean;
+  showSentiment?: boolean;
+  sentimentMap?: Record<string, SentimentResult>;
 }
 
-export function RiskList({ risks, onView, onEdit }: RiskListProps) {
+function SentimentIcon({ sentiment }: { sentiment: SentimentResult['sentiment'] }) {
+  const map: Record<SentimentResult['sentiment'], { Icon: typeof AlertTriangle; color: string; label: string }> = {
+    panic: { Icon: AlertTriangle, color: 'text-red-400', label: 'Panic' },
+    urgent: { Icon: Clock, color: 'text-orange-400', label: 'Urgent' },
+    concerned: { Icon: HelpCircle, color: 'text-amber-400', label: 'Concerned' },
+    neutral: { Icon: Minus, color: 'text-slate-400', label: 'Neutral' },
+    confident: { Icon: CheckCircle2, color: 'text-emerald-400', label: 'Confident' },
+  };
+  const { Icon, color, label } = map[sentiment] || map.neutral;
+  return <Icon className={cn('w-4 h-4', color)} title={label} />;
+}
+
+export function RiskList({ risks, onView, onEdit, onDelete, canEdit, canDelete, showReportedBy, showSentiment, sentimentMap }: RiskListProps) {
   const { t, language } = useLanguage();
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
@@ -26,6 +48,8 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
   const handlePrevious = () => setCurrentPage(p => Math.max(1, p - 1));
   const handleNext = () => setCurrentPage(p => Math.min(totalPages, p + 1));
 
+  const colCount = 5 + (showReportedBy ? 1 : 0) + (showSentiment ? 1 : 0);
+
   return (
     <div className="bg-slate-900 rounded-lg shadow-lg border border-slate-800 overflow-hidden flex flex-col h-full">
       <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
@@ -37,17 +61,23 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
         <table className="w-full text-sm text-left border-collapse">
           <thead className="text-xs text-slate-400 uppercase bg-slate-950/50 border-b border-slate-800">
             <tr>
-              <th className="px-4 py-3 font-medium w-5/12 min-w-[200px]">{t.title}</th>
-              <th className="px-4 py-3 font-medium w-2/12 min-w-[100px]">{t.businessUnit}</th>
-              <th className="px-4 py-3 font-medium w-2/12 min-w-[100px]">{t.type}</th>
-              <th className="px-4 py-3 font-medium w-1/12 min-w-[80px]">{t.score}</th>
-              <th className="px-4 py-3 font-medium w-2/12 text-right min-w-[100px]">{t.actions}</th>
+              <th className="px-4 py-3 font-medium min-w-[200px]">{t.title}</th>
+              <th className="px-4 py-3 font-medium min-w-[100px]">{t.businessUnit}</th>
+              {showReportedBy && (
+                <th className="px-4 py-3 font-medium min-w-[100px]">{language === 'th' ? 'ผู้ป้อน' : 'Reported by'}</th>
+              )}
+              <th className="px-4 py-3 font-medium min-w-[80px]">{t.type}</th>
+              <th className="px-4 py-3 font-medium min-w-[80px]">{t.score}</th>
+              {showSentiment && (
+                <th className="px-4 py-3 font-medium min-w-[70px]">{language === 'th' ? 'โทน' : 'Tone'}</th>
+              )}
+              <th className="px-4 py-3 font-medium text-right min-w-[100px]">{t.actions}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
             {currentRisks.length === 0 ? (
                 <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-slate-500">
+                    <td colSpan={colCount} className="px-4 py-8 text-center text-slate-500">
                         {t.notFound}
                     </td>
                 </tr>
@@ -55,6 +85,7 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
                 currentRisks.map((risk) => {
                 const level = getRiskLevel(risk.score);
                 const { title, description } = getRiskContent(risk, language);
+                const sentiment = showSentiment && sentimentMap?.[risk.id];
                 
                 return (
                     <tr 
@@ -71,6 +102,11 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
                             {risk.businessUnit}
                         </span>
                     </td>
+                    {showReportedBy && (
+                      <td className="px-4 py-3 align-top text-slate-300 text-xs">
+                        {risk.reportedByUserId ? getUsernameById(risk.reportedByUserId) : '-'}
+                      </td>
+                    )}
                     <td className="px-4 py-3 align-top">
                         {risk.type === 'issue' ? (
                              <Badge variant="warning">Issue</Badge>
@@ -84,6 +120,11 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
                             <div className={cn("w-2 h-2 rounded-full", level.bg.replace('/10', ''))}></div>
                         </div>
                     </td>
+                    {showSentiment && (
+                      <td className="px-4 py-3 align-top">
+                        {sentiment ? <SentimentIcon sentiment={sentiment.sentiment} /> : <span className="text-slate-500">-</span>}
+                      </td>
+                    )}
                     <td className="px-4 py-3 align-top text-right">
                         <div className="flex justify-end gap-1 opacity-70 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                         <Button 
@@ -95,15 +136,28 @@ export function RiskList({ risks, onView, onEdit }: RiskListProps) {
                         >
                             <Eye className="w-4 h-4" />
                         </Button>
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-8 w-8 p-0 text-slate-400 hover:text-cyan-400" 
-                            title={t.edit}
-                            onClick={() => onEdit?.(risk)}
-                        >
-                            <Edit2 className="w-4 h-4" />
-                        </Button>
+                        {(!canEdit || canEdit(risk)) && (
+                          <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-8 w-8 p-0 text-slate-400 hover:text-cyan-400" 
+                              title={t.edit}
+                              onClick={() => onEdit?.(risk)}
+                          >
+                              <Edit2 className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {onDelete && canDelete?.(risk) && (
+                          <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              className="h-8 w-8 p-0 text-slate-400 hover:text-red-400" 
+                              title={language === 'th' ? 'ลบ' : 'Delete'}
+                              onClick={() => onDelete(risk)}
+                          >
+                              <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                         </div>
                     </td>
                     </tr>

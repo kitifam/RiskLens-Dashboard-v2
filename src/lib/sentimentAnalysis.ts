@@ -10,7 +10,8 @@ export interface SentimentResult {
 
 // Rule-based analysis (เร็ว ไม่ต้องเรียก API)
 export function analyzeSentimentLocal(text: string): SentimentResult {
-  const lower = text.toLowerCase();
+  const safeText = text ?? '';
+  const lower = safeText.toLowerCase();
   
   // คำที่บ่งบอก sentiment
   const panicWords = ['แน่นอน', 'จะต้อง', 'หนักมาก', 'วิกฤต', 'เสียหายมหาศาล', 'พัง', 'ล่มสลาย'];
@@ -50,14 +51,15 @@ export function analyzeSentimentLocal(text: string): SentimentResult {
   });
   
   // ปรับตาม punctuation
-  const exclamationCount = (text.match(/!/g) || []).length;
+  const exclamationCount = (safeText.match(/!/g) || []).length;
   if (exclamationCount > 2) score -= 0.1 * exclamationCount;
   
-  const questionCount = (text.match(/\?/g) || []).length;
+  const questionCount = (safeText.match(/\?/g) || []).length;
   if (questionCount > 0) score -= 0.05 * questionCount;
   
   // ปรับตามตัวพิมพ์ใหญ่ (CAPS)
-  const capsRatio = (text.match(/[A-Zก-ฮ]/g) || []).length / text.length;
+  const textLen = safeText.length || 1;
+  const capsRatio = (safeText.match(/[A-Zก-ฮ]/g) || []).length / textLen;
   if (capsRatio > 0.3) score -= 0.2;
   
   // Clamp score
@@ -90,9 +92,9 @@ export function analyzeSentimentLocal(text: string): SentimentResult {
 }
 
 // สำหรับ batch analysis (หลาย risk พร้อมกัน)
-export function analyzeBatchSentiment(risks: { id: string; description: string }[]): Record<string, SentimentResult> {
+export function analyzeBatchSentiment(risks: { id: string; description?: string | null }[]): Record<string, SentimentResult> {
   return risks.reduce((acc, risk) => {
-    acc[risk.id] = analyzeSentimentLocal(risk.description);
+    acc[risk.id] = analyzeSentimentLocal(risk.description ?? '');
     return acc;
   }, {} as Record<string, SentimentResult>);
 }

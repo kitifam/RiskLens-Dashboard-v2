@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { MOCK_RISKS } from '../data/mockData';
+import { useRisks } from '../contexts/RiskContext';
 import { Risk } from '../types/risk';
 import { Card, CardContent } from './ui/Card';
 import { Input } from './ui/Input';
@@ -23,44 +23,49 @@ import {
     Sparkles,
     Filter
 } from 'lucide-react';
-import { cn, formatCurrency, getRiskContent } from '../lib/utils';
+import { cn, formatCurrency, getRiskContent, getRiskLevel } from '../lib/utils';
 import { useLanguage } from '../contexts/LanguageContext';
 import { analyzeBatchSentiment } from '../lib/sentimentAnalysis';
 import { SentimentRadar } from './SentimentRadar';
+import { filterRisksByRole, canEditRisk, canDeleteRisk } from '../lib/rbac';
+import type { User } from '../types/user';
 
 interface DashboardProps {
     onEditRisk: (risk: Risk) => void;
+    currentUser?: User | null;
 }
 
 type KPIFilterType = 'financial' | 'critical' | 'mitigation' | 'compliance' | null;
 
-export function Dashboard({ onEditRisk }: DashboardProps) {
+export function Dashboard({ onEditRisk, currentUser }: DashboardProps) {
   const { t, language } = useLanguage();
+  const { risks: allRisks, deleteRisk } = useRisks();
   const [searchTerm, setSearchTerm] = useState('');
   const [filterBU, setFilterBU] = useState<string>('All');
   const [filterType, setFilterType] = useState<string>('All');
   const [heatmapFilter, setHeatmapFilter] = useState<{likelihood: number, impact: number} | null>(null);
   const [kpiFilter, setKpiFilter] = useState<KPIFilterType>(null);
-  
   const [selectedRisk, setSelectedRisk] = useState<Risk | null>(null);
 
-  // Pre-calculate KPIs (from ALL data)
-  const allFinancialExposure = MOCK_RISKS.reduce((acc, risk) => acc + (risk.financialImpact || 0), 0);
-  const allCriticalCount = MOCK_RISKS.filter(r => r.score >= 15).length;
+  // RBAC: เห็นเฉพาะตาม role
+  const risksByRole = useMemo(() => filterRisksByRole(allRisks, currentUser ?? undefined), [allRisks, currentUser]);
+
+  // Pre-calculate KPIs จากข้อมูลที่เห็นตาม role
+  const allFinancialExposure = risksByRole.reduce((acc, risk) => acc + (risk.financialImpact || 0), 0);
+  const allCriticalCount = risksByRole.filter(r => r.score >= 15).length;
   const allMitigationCost = allFinancialExposure * 0.1;
   const complianceRate = 92;
-  // ✅ Calculate sentiment for all risks
   const sentimentMap = useMemo(() => {
-    return analyzeBatchSentiment(MOCK_RISKS.map(r => ({ id: r.id, description: r.description })));
-  }, []);
+    return analyzeBatchSentiment(risksByRole.map(r => ({ id: r.id, description: r.description ?? '' })));
+  }, [risksByRole]);
 
   const filteredRisks = useMemo(() => {
-    return MOCK_RISKS.filter(risk => {
+    return risksByRole.filter(risk => {
       // Localize title/desc for search
       const { title, description } = getRiskContent(risk, language);
       
-      const matchesSearch = title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            description.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = (title || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            (description || '').toLowerCase().includes(searchTerm.toLowerCase());
       const matchesBU = filterBU === 'All' || risk.businessUnit === filterBU;
       const matchesType = filterType === 'All' || risk.type === filterType;
       
@@ -86,7 +91,15 @@ export function Dashboard({ onEditRisk }: DashboardProps) {
       
       return matchesSearch && matchesBU && matchesType && matchesHeatmap && matchesKPI;
     });
-  }, [searchTerm, filterBU, filterType, heatmapFilter, kpiFilter, language]);
+  }, [risksByRole, searchTerm, filterBU, filterType, heatmapFilter, kpiFilter, language]);
+
+  const handleDeleteRisk = (risk: Risk) => {
+    if (!canDeleteRisk(risk, currentUser ?? null)) return;
+    if (window.confirm(language === 'th' ? 'ยืนยันลบรายการนี้?' : 'Delete this risk?')) {
+      deleteRisk(risk.id);
+      setSelectedRisk(null);
+    }
+  };
 
   const handleCellClick = (likelihood: number, impact: number) => {
     if (heatmapFilter?.likelihood === likelihood && heatmapFilter.impact === impact) {
@@ -107,7 +120,7 @@ export function Dashboard({ onEditRisk }: DashboardProps) {
   };
 
   const handleRiskClick = (riskId: string) => {
-    const risk = MOCK_RISKS.find(r => r.id === riskId);
+    const risk = risksByRole.find(r => r.id === riskId);
     if (risk) setSelectedRisk(risk);
   };
 
@@ -337,16 +350,64 @@ export function Dashboard({ onEditRisk }: DashboardProps) {
         </div>
         {/* ✅ เพิ่ม Sentiment Radar ที่นี่ */}
         <div className="w-full">
-            <SentimentRadar risks={MOCK_RISKS} sentimentMap={sentimentMap} />
+            <SentimentRadar risks={risksByRole} sentimentMap={sentimentMap} />
         </div>
       </div>
-      
+
+      {/* Requires Immediate Attention */}
+      {(() => {
+        const critical = [...risksByRole].filter(r => r.score >= 15).sort((a, b) => b.score - a.score).slice(0, 5);
+        if (critical.length === 0) return null;
+        return (
+          <Card className="bg-slate-900 border-slate-800 overflow-hidden mb-8">
+            <div className="px-6 py-4 border-b border-slate-800 flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-400" />
+              <h3 className="font-semibold text-red-400">
+                {language === 'th' ? '▲ ความเสี่ยงที่ต้องให้ความสนใจทันที' : '▲ Requires Immediate Attention'}
+              </h3>
+            </div>
+            <CardContent className="p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                {critical.map((risk) => {
+                  const { title } = getRiskContent(risk, language);
+                  const sentiment = sentimentMap[risk.id];
+                  const level = getRiskLevel(risk.score);
+                  return (
+                    <button
+                      key={risk.id}
+                      type="button"
+                      onClick={() => setSelectedRisk(risk)}
+                      className="text-left p-4 rounded-lg border border-slate-700 bg-slate-800/50 hover:bg-slate-800 hover:border-slate-600 transition-all group"
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <span className={cn('text-lg font-bold font-mono', level.color)}>{risk.score}/25</span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">{risk.businessUnit}</span>
+                      </div>
+                      <h4 className="font-medium text-slate-200 text-sm line-clamp-2 mb-2 group-hover:text-cyan-300 transition-colors">{title}</h4>
+                      {sentiment?.recommendedAction && (
+                        <p className="text-xs text-slate-500 line-clamp-2">{sentiment.recommendedAction}</p>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
       {/* Risk Registry (Full Width) */}
       <div className="w-full">
             <RiskList 
                 risks={filteredRisks} 
                 onView={setSelectedRisk}
                 onEdit={onEditRisk}
+                onDelete={handleDeleteRisk}
+                canEdit={(risk) => canEditRisk(risk, currentUser ?? null)}
+                canDelete={(risk) => canDeleteRisk(risk, currentUser ?? null)}
+                showReportedBy={currentUser?.role === 'admin'}
+                showSentiment={currentUser?.role === 'admin'}
+                sentimentMap={sentimentMap}
             />
       </div>
 

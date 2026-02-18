@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Risk } from '../types/risk';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
@@ -19,6 +19,7 @@ import {
 import { cn, formatCurrency } from '../lib/utils';
 import { useLanguage } from '../contexts/LanguageContext';
 import { findCascadeRisks } from '../lib/correlation';
+import { getCriticalRiskThreshold, notifyEscalation } from '../lib/notifications';
 
 interface CommandCenterProps {
   risks: Risk[];
@@ -40,15 +41,40 @@ interface DecisionItem {
 
 export function CommandCenter({ risks, onRiskClick }: CommandCenterProps) {
   const { t, language } = useLanguage();
-  const [decisions, setDecisions] = useState<Record<string, DecisionStatus>>({});
+  
+  // Load decisions from sessionStorage (persist during session, reset on refresh)
+  const loadDecisions = (): Record<string, DecisionStatus> => {
+    try {
+      const stored = sessionStorage.getItem('riskLens_decisions');
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  };
+  
+  const saveDecisions = (decisions: Record<string, DecisionStatus>) => {
+    try {
+      sessionStorage.setItem('riskLens_decisions', JSON.stringify(decisions));
+    } catch (e) {
+      console.error('Failed to save decisions:', e);
+    }
+  };
+  
+  const [decisions, setDecisions] = useState<Record<string, DecisionStatus>>(loadDecisions());
   const [showHistory, setShowHistory] = useState(false);
+  
+  // Save decisions whenever they change
+  useEffect(() => {
+    saveDecisions(decisions);
+  }, [decisions]);
 
   // Generate decision items based on risk analysis
   const decisionQueue: DecisionItem[] = useMemo(() => {
     const items: DecisionItem[] = [];
+    const criticalThreshold = getCriticalRiskThreshold();
     
-    // Critical risks requiring immediate decision
-    const criticalRisks = risks.filter(r => r.score >= 20 && r.status === 'active');
+    // Critical risks requiring immediate decision (ใช้เกณฑ์จาก Settings)
+    const criticalRisks = risks.filter(r => r.score >= criticalThreshold && r.status === 'active');
     criticalRisks.forEach(risk => {
       const cascade = findCascadeRisks(risks, risk);
       items.push({
@@ -64,8 +90,8 @@ export function CommandCenter({ risks, onRiskClick }: CommandCenterProps) {
       });
     });
 
-    // High risks requiring monitoring
-    const highRisks = risks.filter(r => r.score >= 15 && r.score < 20 && r.status === 'active');
+    // High risks requiring monitoring (ต่ำกว่าเกณฑ์วิกฤต)
+    const highRisks = risks.filter(r => r.score >= 15 && r.score < criticalThreshold && r.status === 'active');
     highRisks.forEach(risk => {
       items.push({
         risk,
@@ -100,6 +126,17 @@ export function CommandCenter({ risks, onRiskClick }: CommandCenterProps) {
 
   const handleDecision = (riskId: string, status: DecisionStatus) => {
     setDecisions(prev => ({ ...prev, [riskId]: status }));
+    if (status === 'escalated') {
+      const risk = risks.find(r => r.id === riskId);
+      if (risk) {
+        notifyEscalation({
+          title: risk.title,
+          riskId: risk.id,
+          score: risk.score,
+          businessUnit: risk.businessUnit,
+        }).catch((err) => console.error('Notify escalation failed:', err));
+      }
+    }
   };
 
   const getUrgencyConfig = (urgency: UrgencyLevel) => {
@@ -241,7 +278,13 @@ export function CommandCenter({ risks, onRiskClick }: CommandCenterProps) {
           </Button>
         </div>
 
-        {decisionQueue.filter(d => showHistory || d.status === 'pending').map((item) => {
+        {decisionQueue
+          .filter(d => {
+            // ถ้าเปิด Show History แสดงทั้งหมด (pending + decided)
+            // ถ้าปิด Show History แสดงเฉพาะ pending
+            return showHistory ? true : d.status === 'pending';
+          })
+          .map((item) => {
           const config = getUrgencyConfig(item.urgency);
           const Icon = config.icon;
           const isDecided = item.status !== 'pending';
@@ -363,7 +406,7 @@ export function CommandCenter({ risks, onRiskClick }: CommandCenterProps) {
           );
         })}
 
-        {decisionQueue.filter(d => showHistory || d.status === 'pending').length === 0 && (
+        {decisionQueue.filter(d => showHistory ? true : d.status === 'pending').length === 0 && (
           <Card className="bg-slate-900 border-slate-800">
             <CardContent className="p-8 text-center">
               <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-3" />

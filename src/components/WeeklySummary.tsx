@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
-import { MOCK_RISKS } from '../data/mockData';
+import { useRisks } from '../contexts/RiskContext';
 import { cn, getRiskLevel, formatDate, getRiskContent } from '../lib/utils';
 import { RiskList } from './RiskList';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -20,22 +20,23 @@ import {
 
 export function WeeklySummary() {
   const { t, language } = useLanguage();
+  const { risks: allRisks } = useRisks(); // ใช้ risks จาก context
   const [selectedSummary, setSelectedSummary] = useState<'total' | 'critical' | 'issues' | 'operational' | null>(null);
 
-  const totalRisks = MOCK_RISKS.length;
-  const criticalRisks = MOCK_RISKS.filter(r => r.score >= 15).length;
-  const issuesCount = MOCK_RISKS.filter(r => r.type === 'issue').length;
+  const totalRisks = allRisks.length;
+  const criticalRisks = allRisks.filter(r => r.score >= 15).length;
+  const issuesCount = allRisks.filter(r => r.type === 'issue').length;
   
   const buCounts: Record<string, number> = {
     'Sales': 0, 'IT': 0, 'Finance': 0, 'Operations': 0, 'HR': 0
   };
-  MOCK_RISKS.forEach(r => {
+  allRisks.forEach(r => {
     if (buCounts[r.businessUnit] !== undefined) {
       buCounts[r.businessUnit]++;
     }
   });
 
-  const topCriticalRisks = [...MOCK_RISKS]
+  const topCriticalRisks = [...allRisks]
     .filter(r => r.score >= 15)
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
@@ -47,7 +48,7 @@ export function WeeklySummary() {
   endOfWeek.setDate(currentDate.getDate() - currentDate.getDay() + 6);
 
   // Filter Logic for Interactivity
-  const filteredRisks = MOCK_RISKS.filter(r => {
+  const filteredRisks = allRisks.filter(r => {
       if (selectedSummary === 'total') return true;
       if (selectedSummary === 'critical') return r.score >= 15;
       if (selectedSummary === 'issues') return r.type === 'issue';

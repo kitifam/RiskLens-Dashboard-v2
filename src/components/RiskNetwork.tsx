@@ -9,6 +9,7 @@ import {
   ZoomOut, 
   GitBranch, 
   AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { cn, getRiskLevel } from '../lib/utils';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -27,13 +28,14 @@ interface SimulationNode extends NetworkNode {
 }
 
 export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [filterType, setFilterType] = useState<'all' | 'high' | 'correlated'>('all');
+  const [shakeKey, setShakeKey] = useState(0);
   
   const { nodes, links } = useMemo(() => generateNetworkData(risks), [risks]);
 
@@ -62,26 +64,26 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
     return links.filter(l => visibleIds.has(l.source) && visibleIds.has(l.target));
   }, [visibleNodes, links]);
 
-  // Initialize nodes
+  // Initialize nodes (เมื่อ shakeKey เปลี่ยน = เขย่า/จัดตำแหน่งใหม่เพื่อลดการซ้อนทับ)
   useEffect(() => {
     const width = 800;
     const height = 500;
+    const forceReshuffle = shakeKey > 0;
 
-    // Map existing positions to new nodes to prevent jumping
     simulationNodesRef.current = visibleNodes.map(n => {
         const existing = simulationNodesRef.current.find(en => en.id === n.id);
-        if (existing) {
+        if (!forceReshuffle && existing) {
              return { ...n, x: existing.x, y: existing.y, vx: existing.vx, vy: existing.vy };
         }
         return {
             ...n,
-            x: width / 2 + (Math.random() - 0.5) * 200,
-            y: height / 2 + (Math.random() - 0.5) * 200,
+            x: width / 2 + (Math.random() - 0.5) * 400,
+            y: height / 2 + (Math.random() - 0.5) * 400,
             vx: 0,
             vy: 0
         };
     });
-  }, [visibleNodes]);
+  }, [visibleNodes, shakeKey]);
 
   // D3 Force Simulation Effect
   useEffect(() => {
@@ -175,7 +177,7 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
       const centerY = height / 2;
       ctx.translate(centerX * (1 - 1/zoom), centerY * (1 - 1/zoom));
 
-      // Draw links
+      // Draw links - ปรับให้เส้นชัดเจนขึ้นและแสดง correlation strength
       visibleLinks.forEach(link => {
         const source = currentNodes.find(n => n.id === link.source);
         const target = currentNodes.find(n => n.id === link.target);
@@ -183,21 +185,46 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
 
         const isHighlighted = currentHover === link.source || currentHover === link.target;
         const isSelected = currentSelected === link.source || currentSelected === link.target;
+        const isConnectedToHover = currentHover && (link.source === currentHover || link.target === currentHover);
 
+        // Draw link line
         ctx.beginPath();
         ctx.moveTo(source.x, source.y);
         ctx.lineTo(target.x, target.y);
-        ctx.strokeStyle = isHighlighted ? '#22d3ee' : isSelected ? '#06b6d4' : '#475569';
-        ctx.lineWidth = isHighlighted ? 2 : 1;
-        ctx.globalAlpha = link.strength * 0.8;
+        
+        // สีและความหนาตามสถานะ
+        if (isHighlighted || isSelected) {
+          ctx.strokeStyle = '#22d3ee'; // cyan-400
+          ctx.lineWidth = 2.5;
+          ctx.globalAlpha = 1;
+        } else if (isConnectedToHover) {
+          ctx.strokeStyle = '#06b6d4'; // cyan-500
+          ctx.lineWidth = 2;
+          ctx.globalAlpha = 0.8;
+        } else {
+          ctx.strokeStyle = '#64748b'; // slate-500
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = link.strength * 0.6;
+        }
+        
         ctx.stroke();
         ctx.globalAlpha = 1;
 
+        // แสดง correlation strength เมื่อ highlight หรือ selected
         if (isHighlighted || isSelected) {
           const midX = (source.x + target.x) / 2;
           const midY = (source.y + target.y) / 2;
+          
+          // Background for text
+          ctx.save();
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+          ctx.fillRect(midX - 15, midY - 7, 30, 14);
+          ctx.restore();
+          
           ctx.fillStyle = '#22d3ee';
-          ctx.font = '10px sans-serif';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
           ctx.fillText(`${(link.strength * 100).toFixed(0)}%`, midX, midY);
         }
       });
@@ -224,33 +251,76 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
 
         // Node circle
         ctx.beginPath();
-        ctx.arc(node.x, node.y, isHovered ? radius + 2 : radius, 0, 2 * Math.PI);
+        ctx.arc(node.x, node.y, isHovered ? radius + 3 : radius, 0, 2 * Math.PI);
         ctx.fillStyle = node.type === 'risk' ? '#0ea5e9' : '#f59e0b';
         ctx.fill();
         
         // Border
         ctx.strokeStyle = isSelected ? '#22d3ee' : isHovered ? '#ffffff' : '#1e293b';
-        ctx.lineWidth = isSelected ? 3 : 2;
+        ctx.lineWidth = isSelected ? 3 : isHovered ? 2.5 : 2;
         ctx.stroke();
 
-        // Label
-        if (isHovered || isSelected || node.score >= 20) {
-          ctx.fillStyle = '#e2e8f0';
-          ctx.font = '11px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(node.title.substring(0, 20) + (node.title.length > 20 ? '...' : ''), node.x, node.y + radius + 15);
+        // Label - แสดงชื่อทุก node โดยปรับ opacity และขนาดตามความสำคัญ
+        const isImportant = isHovered || isSelected || node.score >= 20;
+        const labelText = node.title.length > 30 ? node.title.substring(0, 30) + '...' : node.title;
+        
+        // ปรับ opacity และขนาดตามสถานะ
+        const bgOpacity = isImportant ? 0.95 : node.score >= 15 ? 0.85 : 0.7;
+        const textOpacity = isImportant ? 1 : node.score >= 15 ? 0.9 : 0.75;
+        const fontSize = isImportant ? 11 : node.score >= 15 ? 10 : 9;
+        
+        ctx.save();
+        
+        // Set font ก่อน measureText
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        
+        // Measure text width
+        const textMetrics = ctx.measureText(labelText);
+        const textWidth = textMetrics.width;
+        const textHeight = fontSize + 2;
+        const padding = 5;
+        const bgWidth = Math.max(textWidth + padding * 2, 60); // Minimum width
+        const bgHeight = textHeight + padding * 2;
+        
+        // Background for text readability
+        ctx.fillStyle = `rgba(15, 23, 42, ${bgOpacity})`;
+        ctx.fillRect(node.x - bgWidth / 2, node.y + radius + 6, bgWidth, bgHeight);
+        
+        // Border for important nodes
+        if (isImportant) {
+          ctx.strokeStyle = `rgba(34, 211, 238, ${textOpacity})`; // cyan-400
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(node.x - bgWidth / 2, node.y + radius + 6, bgWidth, bgHeight);
         }
+        
+        // Text
+        ctx.fillStyle = `rgba(226, 232, 240, ${textOpacity})`; // slate-200
+        ctx.fillText(labelText, node.x, node.y + radius + 8);
+        ctx.restore();
 
-        // Score badge
+        // Score badge - ปรับตำแหน่งให้ดีขึ้น
+        const badgeRadius = 9;
+        const badgeX = node.x + radius - 3;
+        const badgeY = node.y - radius + 3;
+        
+        // Badge background with shadow
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        ctx.shadowBlur = 3;
         ctx.fillStyle = '#0f172a';
         ctx.beginPath();
-        ctx.arc(node.x + radius - 2, node.y - radius + 2, 8, 0, 2 * Math.PI);
+        ctx.arc(badgeX, badgeY, badgeRadius, 0, 2 * Math.PI);
         ctx.fill();
+        ctx.restore();
+        
+        // Score text
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 8px sans-serif';
+        ctx.font = 'bold 9px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(node.score.toString(), node.x + radius - 2, node.y - radius + 2);
+        ctx.fillText(node.score.toString(), badgeX, badgeY);
       });
 
       ctx.restore();
@@ -265,29 +335,78 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
     };
   }, [visibleNodes, visibleLinks, zoom]);
 
-  // Handle mouse interactions
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // Helper function: แปลง mouse position เป็น canvas coordinates (แก้ให้ถูกต้อง)
+  const getCanvasCoordinates = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) return { x: 0, y: 0 };
 
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
+    const canvasWidth = canvas.width;  // Internal canvas size (800)
+    const canvasHeight = canvas.height; // Internal canvas size (500)
+    
+    // Mouse position relative to canvas element (in CSS pixels)
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Convert CSS pixels to canvas internal pixels (handle CSS scaling from w-full)
+    const scaleX = canvasWidth / rect.width;
+    const scaleY = canvasHeight / rect.height;
+    const canvasMouseX = mouseX * scaleX;
+    const canvasMouseY = mouseY * scaleY;
+    
+    // Canvas transformation ใน render:
+    // ctx.scale(zoom, zoom)
+    // ctx.translate(centerX * (1 - 1/zoom), centerY * (1 - 1/zoom))
+    // 
+    // Reverse transformation:
+    // 1. Reverse translate: subtract translation
+    // 2. Reverse scale: divide by zoom
+    const centerX = canvasWidth / 2;
+    const centerY = canvasHeight / 2;
+    
+    // Reverse translate first
+    const translatedX = canvasMouseX - centerX * (1 - 1/zoom);
+    const translatedY = canvasMouseY - centerY * (1 - 1/zoom);
+    
+    // Then reverse scale
+    const x = translatedX / zoom;
+    const y = translatedY / zoom;
+    
+    return { x, y };
+  };
+
+  // Handle mouse interactions - แก้ให้ตรงกับตำแหน่งจริงเมื่อมี zoom
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = getCanvasCoordinates(e);
 
     const hovered = simulationNodesRef.current.find(node => {
       const radius = 8 + (node.score / 25) * 12;
       const dx = x - node.x;
       const dy = y - node.y;
-      return Math.sqrt(dx * dx + dy * dy) < radius + 10;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      return distance < radius + 12; // Hit area
     });
 
     setHoveredNode(hovered?.id || null);
   };
 
-  const handleClick = () => {
-    if (hoveredNode) {
-      setSelectedNode(hoveredNode);
-      onRiskClick?.(hoveredNode);
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { x, y } = getCanvasCoordinates(e);
+
+    const clicked = simulationNodesRef.current.find(node => {
+      const radius = 8 + (node.score / 25) * 12;
+      const dx = x - node.x;
+      const dy = y - node.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      return distance < radius + 12;
+    });
+
+    if (clicked) {
+      setSelectedNode(clicked.id);
+      onRiskClick?.(clicked.id);
+    } else {
+      // Click outside = deselect
+      setSelectedNode(null);
     }
   };
 
@@ -329,6 +448,14 @@ export function RiskNetwork({ risks, onRiskClick }: RiskNetworkProps) {
               </Button>
             </div>
             <div className="h-6 w-px bg-slate-700 mx-1" />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShakeKey(k => k + 1)}
+              title={language === 'th' ? 'เขย่า / จัดตำแหน่งวงกลมใหม่' : 'Shake / Reposition nodes'}
+            >
+              <RefreshCw className="w-4 h-4" />
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => setZoom(z => Math.min(z * 1.2, 3))}>
               <ZoomIn className="w-4 h-4" />
             </Button>

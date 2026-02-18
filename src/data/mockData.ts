@@ -8,7 +8,7 @@ export const MOCK_RISKS: Risk[] = [
     titleEn: 'Major Client Contract Renewal at Risk ($2M)',
     descriptionEn: 'Key decision maker left the client company. Relationship unstable with contract expiring next month.',
     type: 'risk',
-    businessUnit: 'Sales',
+    businessUnit: 'IT',
     likelihood: 4,
     impact: 5,
     score: 20,
@@ -17,6 +17,8 @@ export const MOCK_RISKS: Risk[] = [
     status: 'active',
     createdAt: '2024-05-01T10:00:00Z',
     updatedAt: '2024-05-01T10:00:00Z',
+    reportedByUserId: '2',
+    createdBy: '2',
   },
   {
     id: '2',
@@ -33,6 +35,8 @@ export const MOCK_RISKS: Risk[] = [
     status: 'active',
     createdAt: '2024-05-10T08:30:00Z',
     updatedAt: '2024-05-10T08:30:00Z',
+    reportedByUserId: '1',
+    createdBy: '1',
   },
   {
     id: '3',
@@ -41,7 +45,7 @@ export const MOCK_RISKS: Risk[] = [
     titleEn: 'New Compliance Regulations Effective Q3',
     descriptionEn: 'EU AI Act requires new documentation for ML models. Team needs training.',
     type: 'risk',
-    businessUnit: 'Finance',
+    businessUnit: 'IT',
     likelihood: 5,
     impact: 3,
     score: 15,
@@ -50,6 +54,8 @@ export const MOCK_RISKS: Risk[] = [
     status: 'active',
     createdAt: '2024-04-15T14:20:00Z',
     updatedAt: '2024-04-15T14:20:00Z',
+    reportedByUserId: '2',
+    createdBy: '2',
   },
   {
     id: '4',
@@ -147,6 +153,8 @@ export const MOCK_RISKS: Risk[] = [
     status: 'active',
     createdAt: '2024-05-01T15:00:00Z',
     updatedAt: '2024-05-01T15:00:00Z',
+    reportedByUserId: 'user2',
+    createdBy: 'user2',
   },
   {
     id: '10',
@@ -195,6 +203,8 @@ export const MOCK_RISKS: Risk[] = [
     status: 'active',
     createdAt: '2024-05-03T10:30:00Z',
     updatedAt: '2024-05-03T10:30:00Z',
+    reportedByUserId: 'user2',
+    createdBy: 'user2',
   },
   {
     id: '13',

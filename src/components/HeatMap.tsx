@@ -119,6 +119,9 @@ export function HeatMap({ risks, onRiskClick, onCellClick, selectedCell }: HeatM
           <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-orange-500 shadow-[0_0_5px_rgba(249,115,22,0.5)]"></div>{t.high} (13-20)</div>
           <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_5px_rgba(239,68,68,0.5)]"></div>{t.critical} (21-25)</div>
       </div>
+      <p className="text-center text-xs text-slate-500 mt-4 pb-1">
+        {language === 'th' ? `รวม ${risks.length} ความเสี่ยงในแผนที่` : `Total ${risks.length} risks in heatmap`}
+      </p>
     </div>
   );
 }

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { Input } from './ui/Input';
 import { Textarea } from './ui/Textarea';
 import { Select } from './ui/Select';
+import { DatePicker } from './ui/DatePicker';
 import { Button } from './ui/Button';
 import { Badge } from './ui/Badge';
 import { calculateScore, getRiskLevel, cn, formatCurrency } from '../lib/utils';
@@ -29,8 +30,12 @@ import {
   Cloud,
   Trash2
 } from 'lucide-react';
-import { MOCK_RISKS } from '../data/mockData';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRisks } from '../contexts/RiskContext';
+import { useAuth } from '../contexts/AuthContext';
+import { addScore } from '../data/mockUsers';
+import { getRBACRole } from '../types/user';
+import { getCriticalRiskThreshold, notifyCriticalRisk } from '../lib/notifications';
 
 // ✅ Import Risk Interview types and functions
 import { 
@@ -103,14 +108,22 @@ function findSimilarRisks(existingRisks: Risk[], newTitle: string, newDesc: stri
 
 const DRAFT_STORAGE_KEY = 'risklens_draft_v1';
 
+function getTodayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormProps) {
   const { t, language } = useLanguage();
+  const { risks: allRisks, addRisk, updateRisk } = useRisks(); // ใช้ context แทน MOCK_RISKS
   
   // ✅ Mode state: 'form' | 'interview'
   const [mode, setMode] = useState<'form' | 'interview'>('form');
   
-  // Form states
-  const [formData, setFormData] = useState<RiskFormData>(INITIAL_DATA);
+  // Form states — default Expected Date = วันนี้
+  const [formData, setFormData] = useState<RiskFormData>(() => ({
+    ...INITIAL_DATA,
+    expectedDate: getTodayISO(),
+  }));
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   
   // Auto-save State
@@ -177,6 +190,33 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
     }
   }, [initialData]);
 
+  const { currentUser } = useAuth();
+  const rbac = currentUser ? getRBACRole(currentUser.role) : null;
+  const lockDepartment = rbac === 'MANAGER' || rbac === 'USER';
+
+  // Default: หน่วยงาน = แผนกตัวเอง, Expected Date = วันนี้ (สำหรับฟอร์มเพิ่มใหม่)
+  const validBUs = ['Sales', 'IT', 'Finance', 'Operations', 'HR'];
+  useEffect(() => {
+    if (initialData) return;
+    setFormData(prev => {
+      const next = { ...prev };
+      if (!prev.expectedDate) next.expectedDate = getTodayISO();
+      if (currentUser && validBUs.includes(currentUser.businessUnit) && !prev.businessUnit) {
+        next.businessUnit = currentUser.businessUnit as RiskFormData['businessUnit'];
+      }
+      return next;
+    });
+  }, [initialData, currentUser?.id, currentUser?.businessUnit]);
+
+  // RBAC: MANAGER/USER ล็อกหน่วยงานให้เป็นแผนกตัวเอง
+  useEffect(() => {
+    if (!currentUser || initialData || !lockDepartment) return;
+    const bu = currentUser.businessUnit as RiskFormData['businessUnit'];
+    if (bu && validBUs.includes(bu)) {
+      setFormData(prev => ({ ...prev, businessUnit: bu }));
+    }
+  }, [currentUser?.id, currentUser?.businessUnit, lockDepartment, initialData]);
+
   // Auto-save logic
   useEffect(() => {
     // Don't auto-save if editing existing data
@@ -209,7 +249,7 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
         debouncedDescription.length > 10 &&
         !initialData) {
         
-      const similar = findSimilarRisks(MOCK_RISKS, debouncedTitle, debouncedDescription);
+      const similar = findSimilarRisks(allRisks, debouncedTitle, debouncedDescription);
       if (similar.length > 0) {
         setSimilarRisks(similar);
         setShowSimilarWarning(true);
@@ -315,20 +355,30 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
     setAutoFilledScore(true);
   };
 
+  const getCleanedAiDescription = (ai: AIAnalysisResult) =>
+    (ai.improvedDescription || '')
+      .replace(/^\[AI ปรับแก้\]\s*/i, '')
+      .replace(/\s*\(ปรับจาก[^)]*\)\s*$/i, '')
+      .replace(/\s*\(AI ตรวจสอบแล้วถูกต้อง\)\s*$/i, '')
+      .trim();
   const isMismatch = aiAnalysis && aiAnalysis.detectedType !== formData.type;
-  const isApplied = aiAnalysis && formData.description === aiAnalysis.improvedDescription;
+  const isApplied = aiAnalysis && formData.description === getCleanedAiDescription(aiAnalysis);
   const shouldBlockSave = isMismatch && !isApplied;
 
   const errors = {
-    title: touched.title && (formData.title.length < 5) ? "หัวข้อต้องยาวอย่างน้อย 5 ตัวอักษร" : "",
-    description: touched.description && (formData.description.length < 10) ? "รายละเอียดต้องยาวอย่างน้อย 10 ตัวอักษร" : "",
-    businessUnit: touched.businessUnit && !formData.businessUnit ? "กรุณาเลือกหน่วยงาน" : "",
+    title: formData.title.length < 5 ? (language === 'th' ? "หัวข้อต้องยาวอย่างน้อย 5 ตัวอักษร" : "Title must be at least 5 characters") : "",
+    description: formData.description.length < 10 ? (language === 'th' ? "รายละเอียดต้องยาวอย่างน้อย 10 ตัวอักษร" : "Description must be at least 10 characters") : "",
+    businessUnit: !formData.businessUnit ? (language === 'th' ? "กรุณาเลือกหน่วยงาน" : "Please select business unit") : "",
   };
-  
-  const isValid = formData.title.length >= 5 && 
-                  formData.description.length >= 10 && 
-                  !!formData.businessUnit && 
+  const isValid = formData.title.length >= 5 &&
+                  formData.description.length >= 10 &&
+                  !!formData.businessUnit &&
                   !shouldBlockSave;
+  const missingList = [errors.title, errors.description, errors.businessUnit].filter(Boolean);
+  if (shouldBlockSave) missingList.push(language === 'th' ? "ประเภทความเสี่ยงไม่ตรงกับที่ AI วิเคราะห์ — กรุณากดใช้ข้อความที่แนะนำหรือแก้ประเภท" : "Risk type doesn't match AI analysis — use suggested text or change type");
+  if (!isValid && missingList.length === 0) {
+    missingList.push(language === 'th' ? 'กรุณากรอกข้อมูลให้ครบถ้วน (หัวข้อ, รายละเอียด, หน่วยงาน)' : 'Please fill in all required fields (title, description, business unit)');
+  }
 
   const handleChange = (field: keyof RiskFormData, value: any) => {
     setTouched(prev => ({ ...prev, [field]: true }));
@@ -341,10 +391,12 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
 
   const handleApplyRewrite = () => {
     if (aiAnalysis) {
+      const cleanTitle = (aiAnalysis.improvedTitle || '').replace(/^\[Professional\]\s*/i, '').trim();
+      const cleanDesc = getCleanedAiDescription(aiAnalysis);
       setFormData(prev => ({
           ...prev,
-          title: aiAnalysis.improvedTitle,
-          description: aiAnalysis.improvedDescription,
+          title: cleanTitle,
+          description: cleanDesc,
           likelihood: aiAnalysis.suggestedLikelihood,
           impact: aiAnalysis.suggestedImpact
       }));
@@ -357,18 +409,18 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
       if (!isValid) return;
 
       if (initialData) {
-        const index = MOCK_RISKS.findIndex(r => r.id === initialData.id);
-        if (index !== -1) {
-            MOCK_RISKS[index] = {
-                ...MOCK_RISKS[index],
-                ...formData,
-                businessUnit: formData.businessUnit as BusinessUnit,
-                score,
-                updatedAt: new Date().toISOString(),
-                aiSuggestedType: aiAnalysis?.detectedType,
-            };
-        }
+        // Update existing risk
+        updateRisk(initialData.id, {
+          ...formData,
+          businessUnit: formData.businessUnit as BusinessUnit,
+          score,
+          aiSuggestedType: aiAnalysis?.detectedType,
+        });
+        setIsSuccess(true);
+        setTimeout(() => onSuccess?.(), 1200);
+        return;
     } else {
+        // Create new risk
         const newRisk: Risk = {
             id: Math.random().toString(36).substr(2, 9),
             ...formData,
@@ -378,12 +430,34 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             aiSuggestedType: aiAnalysis?.detectedType,
+            reportedByUserId: currentUser?.id,
+            createdBy: currentUser?.id,
         };
-        MOCK_RISKS.unshift(newRisk);
-        clearDraft(); // ✅ Clear draft on success
+        addRisk(newRisk);
+        clearDraft();
+        if (currentUser) {
+            addScore(
+                currentUser.id,
+                'create_risk',
+                `Created risk: "${newRisk.title}"`,
+                newRisk.id
+            );
+        }
+        // Trigger: แจ้งเตือนเมื่อความเสี่ยงใหม่ >= เกณฑ์วิกฤต (ตามช่องทางที่เปิดไว้)
+        const threshold = getCriticalRiskThreshold();
+        if (newRisk.score >= threshold) {
+            notifyCriticalRisk({
+                title: newRisk.title,
+                reporterName: currentUser?.name ?? '—',
+                score: newRisk.score,
+                businessUnit: newRisk.businessUnit,
+            }).catch((err) => console.error('Critical risk notification failed:', err));
+        }
     }
     
     setIsSuccess(true);
+    // กลับไปหน้าแดชบอร์ดหลังบันทึกสำเร็จ (ให้หน้าจอเปลี่ยน)
+    setTimeout(() => onSuccess?.(), 1200);
   }
 
   const handleReset = () => {
@@ -929,28 +1003,30 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
                 </div>
               )}
 
-              {/* AI Rewrite Suggestion Box */}
-              {aiAnalysis && (
+              {/* AI Rewrite Suggestion Box - แสดงเฉพาะคำแนะนำ ไม่มี [AI ปรับแก้] หรือที่มาข้อความ */}
+              {aiAnalysis && (() => {
+                  const cleanTitle = (aiAnalysis.improvedTitle || '').replace(/^\[Professional\]\s*/i, '').trim();
+                  const cleanDesc = (aiAnalysis.improvedDescription || '')
+                      .replace(/^\[AI ปรับแก้\]\s*/i, '')
+                      .replace(/\s*\(ปรับจาก[^)]*\)\s*$/i, '')
+                      .replace(/\s*\(AI ตรวจสอบแล้วถูกต้อง\)\s*$/i, '')
+                      .trim();
+                  return (
                   <div className={cn(
                       "rounded-lg p-4 animate-in fade-in slide-in-from-top-2 border",
                       shouldBlockSave ? "bg-red-950/10 border-red-500/30" : "bg-indigo-950/20 border-indigo-500/30"
                   )}>
                       <div className="flex items-start gap-3 mb-3">
                           {shouldBlockSave ? <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5" /> : <Wand2 className="w-5 h-5 text-indigo-400 mt-0.5" />}
-                          <div>
-                              <span className={cn("text-sm font-bold block mb-1", shouldBlockSave ? "text-red-300" : "text-indigo-300")}>
-                                  {t.aiRewriteTitle}
-                              </span>
-                              <p className="text-sm text-slate-300 italic">
-                                  "{aiAnalysis.reasoning}"
-                              </p>
-                          </div>
+                          <span className={cn("text-sm font-bold block", shouldBlockSave ? "text-red-300" : "text-indigo-300")}>
+                              {t.aiRewriteTitle}
+                          </span>
                       </div>
 
                       <div className="bg-slate-950/50 p-3 rounded border border-slate-800 mb-3 relative overflow-hidden group">
-                          <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 to-transparent pointer-events-none"></div>
-                          <p className="font-medium text-slate-200 text-sm mb-1">{aiAnalysis.improvedTitle}</p>
-                          <p className="text-slate-400 text-xs line-clamp-2">"{aiAnalysis.improvedDescription}"</p>
+                          <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/5 to-transparent pointer-events-none" />
+                          <p className="font-medium text-slate-200 text-sm mb-1">{cleanTitle}</p>
+                          <p className="text-slate-400 text-xs line-clamp-2">{cleanDesc}</p>
                           <div className="mt-2 flex items-center gap-2">
                               <Badge variant="default" className="text-[10px] bg-indigo-500/10 text-indigo-300 border-indigo-500/20">
                                   AI Auto-Score: {calculateScore(aiAnalysis.suggestedLikelihood, aiAnalysis.suggestedImpact)}/25
@@ -963,7 +1039,8 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
                           {t.aiUseThis}
                       </Button>
                   </div>
-              )}
+                  );
+              })()}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <Select
@@ -979,24 +1056,23 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
                       onChange={(e) => handleChange('businessUnit', e.target.value)}
                       error={errors.businessUnit}
                       required
+                      disabled={lockDepartment}
                   />
                   
                     <Input 
                       type="number"
                       label={`${t.financialExposure} (USD)`}
                       placeholder="0.00"
-                      value={formData.financialImpact}
-                      onChange={(e) => handleChange('financialImpact', parseFloat(e.target.value))}
+                      value={Number.isFinite(formData.financialImpact) ? formData.financialImpact : ''}
+                      onChange={(e) => handleChange('financialImpact', Number(e.target.value) || 0)}
                   />
               </div>
               
                 <div>
-                  <Input 
-                      type="date"
+                  <DatePicker
                       label={t.expectedDate}
                       value={formData.expectedDate}
-                      onChange={(e) => handleChange('expectedDate', e.target.value)}
-                      className="cursor-pointer" 
+                      onChange={(v) => handleChange('expectedDate', v)}
                   />
               </div>
 
@@ -1081,17 +1157,20 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
       </Card>
 
       <div className="flex flex-col gap-4">
-          {/* Validation Alert */}
-          {!isValid && (Object.keys(touched).length > 0 || shouldBlockSave) && (
-              <div className="bg-red-950/20 border border-red-500/20 rounded-lg p-3 flex items-start gap-3">
+          {/* แจ้งว่าขาดอะไรจึงบันทึกไม่ได้ */}
+          {!isValid && (
+              <div className="bg-red-950/20 border border-red-500/20 rounded-lg p-3 flex items-start gap-3" role="alert">
                   <XCircle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
                   <div className="space-y-1">
-                      <p className="text-sm font-medium text-red-400">{t.saveBlocked}</p>
-                      <ul className="text-xs text-red-300/80 list-disc list-inside">
-                          {errors.title && <li>{errors.title}</li>}
-                          {errors.description && <li>{errors.description}</li>}
-                          {errors.businessUnit && <li>{errors.businessUnit}</li>}
-                          {shouldBlockSave && <li>{t.aiMismatchDesc}</li>}
+                      <p className="text-sm font-medium text-red-400">
+                          {language === 'th' ? 'ไม่สามารถบันทึกได้ เพราะ:' : "Can't save because:"}
+                      </p>
+                      <ul className="text-xs text-red-300/90 list-disc list-inside space-y-0.5">
+                          {missingList.length > 0 ? missingList.map((msg, i) => (
+                              <li key={i}>{msg}</li>
+                          )) : (
+                              <li>{language === 'th' ? 'กรุณากรอกข้อมูลให้ครบถ้วน' : 'Please complete all required fields'}</li>
+                          )}
                       </ul>
                   </div>
               </div>
@@ -1102,7 +1181,14 @@ export function AddRiskForm({ onCancel, onSuccess, initialData }: AddRiskFormPro
                   if(!initialData) clearDraft();
                   onCancel?.();
               }}>Cancel</Button>
-              <Button disabled={!isValid || isAnalyzing} onClick={handleSubmit}>
+              <Button
+                  type="button"
+                  disabled={!isValid || isAnalyzing}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleSubmit(e as unknown as React.FormEvent);
+                  }}
+              >
                   <Save className="w-4 h-4 mr-2" />
                   {initialData ? 'Update' : 'Save'}
               </Button>

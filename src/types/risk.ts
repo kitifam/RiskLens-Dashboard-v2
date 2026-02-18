@@ -22,6 +22,12 @@ export interface Risk {
   status: 'active' | 'mitigated' | 'closed';
   createdAt: string;
   updatedAt: string;
+  /** User ID ที่ป้อน risk นี้ (จาก mockUsers) */
+  reportedByUserId?: string;
+  /** สำหรับ RBAC: ผู้สร้างรายการ (ใช้ร่วมกับ reportedByUserId) */
+  createdBy?: string;
+  /** สำหรับ RBAC: ผู้รับมอบหมาย (USER เห็นได้ถ้า assignedTo = ตัวเอง) */
+  assignedTo?: string;
 }
 
 export interface RiskStats {
