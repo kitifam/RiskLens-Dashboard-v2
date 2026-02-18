@@ -194,7 +194,7 @@ function AppContent() {
               <div className="p-2 bg-cyan-900/30 rounded-lg border border-cyan-500/30">
                 <ShieldCheck className="w-6 h-6 text-cyan-400" />
               </div>
-              <span className="text-xl font-bold text-slate-100 hidden sm:block tracking-wide">>
+              <span className="text-xl font-bold text-slate-100 hidden sm:block tracking-wide">
                 {t.appTitle} <span className="text-cyan-500 text-xs font-normal ml-1">v5.0</span>
               </span>
             </div>
